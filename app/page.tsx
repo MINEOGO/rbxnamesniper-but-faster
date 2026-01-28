@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef, useCallback, useEffect } from "react"
+import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -36,68 +36,58 @@ interface UsernameResult {
 export default function RbxNameSniper() {
   const { theme, setTheme } = useTheme()
   
-  // -- Configuration State --
   const [config, setConfig] = useState<Config>({
     names: 10,
     length: 5,
     method: "random",
-    concurrency: 5, // Lowered default concurrency for stability
+    concurrency: 5,
     birthday: "1999-04-20",
   })
 
-  // -- Operational State --
   const [isRunning, setIsRunning] = useState(false)
   const [results, setResults] = useState<UsernameResult[]>([])
   const [progress, setProgress] = useState(0)
   const [logs, setLogs] = useState<string[]>([])
   
-  // -- Refs for High-Frequency Updates --
   const abortControllerRef = useRef<AbortController | null>(null)
   const foundCountRef = useRef(0)
   const logBufferRef = useRef<string[]>([])
   const resultsBufferRef = useRef<UsernameResult[]>([])
   const logContainerRef = useRef<HTMLDivElement>(null)
 
-  // -- Helper: Format Log Messages --
   const createLogMessage = (message: string, type: "info" | "success" | "error" = "info") => {
     const timestamp = new Date().toLocaleTimeString()
     const prefix = type === "success" ? "✓" : type === "error" ? "✗" : "•"
     return `[${timestamp}] ${prefix} ${message}`
   }
 
-  // -- Effect: Auto-scroll Logs --
   useEffect(() => {
     if (logContainerRef.current) {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight
     }
   }, [logs])
 
-  // -- Effect: Flush Buffers to State --
-  // This runs on an interval to prevent re-rendering React 1000 times a second
   useEffect(() => {
     let intervalId: NodeJS.Timeout
 
     if (isRunning) {
       intervalId = setInterval(() => {
-        // Flush Logs
-        if (logBufferRef.current.length > 0) {
-          setLogs(prev => {
-            // Keep only the last 200 logs to prevent memory issues
-            const newLogs = [...prev, ...logBufferRef.current]
-            return newLogs.slice(-200)
-          })
-          logBufferRef.current = []
+        const currentLogs = [...logBufferRef.current]
+        const currentResults = [...resultsBufferRef.current]
+
+        if (currentLogs.length > 0) logBufferRef.current = []
+        if (currentResults.length > 0) resultsBufferRef.current = []
+
+        if (currentLogs.length > 0) {
+          setLogs(prev => [...prev, ...currentLogs].slice(-200))
         }
 
-        // Flush Results
-        if (resultsBufferRef.current.length > 0) {
-          setResults(prev => [...prev, ...resultsBufferRef.current])
-          resultsBufferRef.current = []
+        if (currentResults.length > 0) {
+          setResults(prev => [...prev, ...currentResults])
         }
 
-        // Update Progress
         setProgress(Math.min((foundCountRef.current / config.names) * 100, 100))
-      }, 100) // Update UI every 100ms
+      }, 100)
     }
 
     return () => {
@@ -105,8 +95,6 @@ export default function RbxNameSniper() {
     }
   }, [isRunning, config.names])
 
-
-  // -- Logic: Name Generators --
   const makeUsername = (config: Config): string => {
     const { length, method } = config
 
@@ -143,11 +131,8 @@ export default function RbxNameSniper() {
     }
   }
 
-  // -- Logic: API Check --
   const checkUsername = async (username: string, config: Config, signal: AbortSignal): Promise<number | null> => {
     try {
-      // NOTE: Ensure this API endpoint actually exists in your Next.js app 
-      // at app/api/validate/route.ts or pages/api/validate.ts
       const url = `/api/validate?username=${encodeURIComponent(username)}&birthday=${encodeURIComponent(config.birthday)}`
       
       const response = await fetch(url, { 
@@ -156,7 +141,6 @@ export default function RbxNameSniper() {
       })
 
       if (!response.ok) {
-        // Handle non-200 responses (like 404 if API is missing)
         throw new Error(`HTTP ${response.status}`)
       }
       
@@ -164,15 +148,11 @@ export default function RbxNameSniper() {
       return data.code
     } catch (error: any) {
       if (error.name === "AbortError") throw error
-      
-      // If the API is missing (404), we return a specific null to handle it gracefully in the worker
       return null
     }
   }
 
-  // -- Logic: Main Generator Loop --
   const startGeneration = async () => {
-    // Reset State
     setResults([])
     setLogs([])
     setProgress(0)
@@ -180,31 +160,23 @@ export default function RbxNameSniper() {
     logBufferRef.current = []
     resultsBufferRef.current = []
     
-    // Start State
     setIsRunning(true)
 
     const controller = new AbortController()
     abortControllerRef.current = controller
 
-    // Initial Logs
     logBufferRef.current.push(createLogMessage(`Initializing sniper...`, "info"))
     logBufferRef.current.push(createLogMessage(`Target: ${config.names} valid names`, "info"))
     logBufferRef.current.push(createLogMessage(`Method: ${config.method}, Length: ${config.length}`, "info"))
 
-    // Force an immediate state update for initial logs
     setLogs([...logBufferRef.current])
     logBufferRef.current = []
 
-    let totalAttempts = 0
-
-    // The Worker Function
-    const worker = async (workerId: number) => {
+    const worker = async () => {
       while (foundCountRef.current < config.names && !controller.signal.aborted) {
-        totalAttempts++
         const username = makeUsername(config)
 
         try {
-          // ARTIFICIAL DELAY: Crucial to prevent UI freezing and allow React to render updates
           await new Promise(r => setTimeout(r, 50 + (Math.random() * 50)))
 
           const code = await checkUsername(username, config, controller.signal)
@@ -212,7 +184,6 @@ export default function RbxNameSniper() {
           if (controller.signal.aborted) break
 
           if (code === 0) {
-            // Success
             if (foundCountRef.current < config.names) {
               foundCountRef.current++
               const result: UsernameResult = { username, status: "valid", timestamp: new Date() }
@@ -220,12 +191,9 @@ export default function RbxNameSniper() {
               logBufferRef.current.push(createLogMessage(`[Found] ${username}`, "success"))
             }
           } else if (code !== null) {
-            // Taken (assuming non-zero code means taken)
             logBufferRef.current.push(createLogMessage(`${username} : Taken (Code ${code})`, "info"))
           } else {
-            // API Error / Null
-            logBufferRef.current.push(createLogMessage(`${username} : Check Failed (API Error)`, "error"))
-            // Slow down significantly if API is failing to prevent spamming logs
+            logBufferRef.current.push(createLogMessage(`${username} : Check Failed`, "error"))
             await new Promise(r => setTimeout(r, 1000))
           }
         } catch (error: any) {
@@ -237,7 +205,7 @@ export default function RbxNameSniper() {
     }
     
     try {
-        const workers = Array.from({ length: config.concurrency }, (_, i) => worker(i))
+        const workers = Array.from({ length: config.concurrency }, () => worker())
         await Promise.all(workers)
     } finally {
         setIsRunning(false)
@@ -247,12 +215,14 @@ export default function RbxNameSniper() {
           ? "Process stopped by user."
           : `Complete! Found ${foundCountRef.current} valid names.`
         
-        // Final flush
-        setLogs(prev => {
-           const finalLogs = [...prev, ...logBufferRef.current, createLogMessage(finalMessage, aborted ? "info" : "success")]
-           return finalLogs.slice(-200)
-        })
-        setResults(prev => [...prev, ...resultsBufferRef.current])
+        const finalLogs = [...logBufferRef.current, createLogMessage(finalMessage, aborted ? "info" : "success")]
+        const finalResults = [...resultsBufferRef.current]
+        
+        logBufferRef.current = []
+        resultsBufferRef.current = []
+
+        setLogs(prev => [...prev, ...finalLogs].slice(-200))
+        setResults(prev => [...prev, ...finalResults])
         setProgress(aborted ? (foundCountRef.current / config.names) * 100 : 100)
     }
   }
@@ -312,7 +282,6 @@ export default function RbxNameSniper() {
 
       <div className="container mx-auto px-4 py-8">
         <div className="grid gap-6 lg:grid-cols-2">
-          {/* CONFIGURATION CARD */}
           <Card className="shadow-lg">
             <CardHeader>
               <CardTitle>Configuration</CardTitle>
@@ -403,7 +372,6 @@ export default function RbxNameSniper() {
             </CardContent>
           </Card>
 
-          {/* RESULTS CARD */}
           <Card className="flex flex-col shadow-lg h-[600px]">
             <CardHeader className="pb-2">
               <CardTitle className="flex items-center justify-between">
@@ -424,7 +392,6 @@ export default function RbxNameSniper() {
             </CardHeader>
             <CardContent className="flex-1 flex flex-col gap-4 min-h-0">
               
-              {/* LOG WINDOW */}
               <div className="flex-1 min-h-0 flex flex-col space-y-2">
                 <Label>Console Log</Label>
                 <div 
@@ -443,7 +410,6 @@ export default function RbxNameSniper() {
                 </div>
               </div>
 
-              {/* FOUND LIST */}
               <div className="h-1/3 min-h-[150px] flex flex-col space-y-2">
                 <div className="flex justify-between items-center">
                     <Label>Valid Hits ({validCount})</Label>
